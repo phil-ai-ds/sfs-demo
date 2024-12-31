@@ -192,6 +192,7 @@ fig = px.imshow(
 st.plotly_chart(fig)
 
 # Store and Product Selection
+# Store and Product Selection
 st.header("Daily Stock, Demand, and Performance Metrics")
 selected_stores = st.multiselect("Select Stores", locations, default=offline_stores)
 selected_products = st.multiselect("Select Products", products, default=products[:3])
@@ -205,14 +206,24 @@ filtered_data = simulated_demand[
 # Plot daily metrics using Plotly
 st.subheader("Daily Stock Levels, Demand, Shared Stock, and Fulfillment Rates")
 if not filtered_data.empty:
+    # Reshape filtered_data into a long format for multi-metric plots
+    melted_data = filtered_data.melt(
+        id_vars=["Day", "Location", "Product"],  # Columns to keep
+        value_vars=["Remaining_Stock", "Demand", "Shared_Stock_To_Online", "Fulfilled"],  # Columns to unpivot
+        var_name="Metric",  # New column for the metric name
+        value_name="Value"  # New column for the metric value
+    )
+
+    # Create a line plot with the reshaped data
     fig = px.line(
-        filtered_data,
+        melted_data,
         x="Day",
-        y=["Remaining_Stock", "Demand", "Shared_Stock_To_Online", "Fulfilled"],
+        y="Value",
         color="Location",
-        line_group="Product",
-        labels={"value": "Value", "variable": "Metric", "Day": "Day"},
-        title="Daily Metrics (Stock, Demand, Shared Stock, and Fulfillment)",
+        line_group="Metric",
+        facet_row="Metric",  # Separate lines by metric type
+        labels={"Value": "Value", "Day": "Day", "Metric": "Metric Type"},
+        title="Daily Metrics (Stock, Demand, Shared Stock, Fulfillment)"
     )
     st.plotly_chart(fig)
 else:
