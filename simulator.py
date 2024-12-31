@@ -26,7 +26,7 @@ def calculate_safety_stock(demand_data, safety_days_by_category, product_to_cate
         axis=1
     )
     return safety_stock[['Day', 'Location', 'Product', 'Safety_Stock']]
-
+'''
 def simulate_fulfillment(initial_stock, daily_demand, safety_data, reservation_ratios_by_category, product_to_category, offline_stores):
     """
     Simulate the fulfillment rates based on safety stock and reservation ratios.
@@ -123,6 +123,87 @@ def simulate_fulfillment(initial_stock, daily_demand, safety_data, reservation_r
                 ] -= fulfilled
 
     return daily_demand
+'''
+
+def simulate_fulfillment(initial_stock, daily_demand, safety_data, reservation_ratios_by_category, product_to_category, offline_stores):
+    """
+    Optimized simulation of fulfillment rates based on safety stock and reservation ratios.
+    """
+    # Prepare stock data for simulation
+    stock_data = initial_stock.copy()
+    stock_data.rename(columns={"Initial_Stock": "Remaining_Stock"}, inplace=True)
+
+    # Add fulfillment tracking columns
+    daily_demand = daily_demand.copy()
+    daily_demand["Fulfilled"] = 0
+    daily_demand["Unfulfilled"] = daily_demand["Demand"]  # At first, all demand is unfulfilled
+    daily_demand["Shared_Stock_To_Online"] = 0
+
+    # Map products to their categories
+    daily_demand["Category"] = daily_demand["Product"].map(product_to_category)
+
+    # Iterate day by day (single loop instead of nested)
+    for day in range(1, daily_demand["Day"].max() + 1):
+        # Get shared stock for all stores and products for the current day
+        daily_safety_stock = safety_data[safety_data["Day"] == day][["Location", "Product", "Safety_Stock"]]
+        stock_data = stock_data.merge(daily_safety_stock, on=["Location", "Product"], how="left")
+        stock_data["Safety_Stock"].fillna(0, inplace=True)
+
+        # Calculate shared stock for all store-product combinations
+        stock_data["Shared_Stock"] = (stock_data["Remaining_Stock"] - stock_data["Safety_Stock"]).clip(lower=0)
+        stock_data["Shared_Stock"] *= stock_data["Product"].map(
+            lambda p: reservation_ratios_by_category.get(product_to_category[p], 0.0)
+        )
+        stock_data["Shared_Stock"] = stock_data["Shared_Stock"].clip(lower=0)  # Ensure no negative shared stock
+
+        # Distribute shared stock to online demand
+        shared_stock_data = stock_data[stock_data["Location"].isin(offline_stores)]
+        shared_stock_summary = shared_stock_data.groupby("Product")["Shared_Stock"].sum()
+
+        online_mask = (daily_demand["Day"] == day) & (daily_demand["Location"] == "Online Platform")
+        online_demand = daily_demand.loc[online_mask]
+        online_demand = online_demand.merge(shared_stock_summary, on="Product", how="left")
+        online_demand["Shared_Stock_To_Online"] = online_demand[["Shared_Stock", "Unfulfilled"]].min(axis=1)
+        online_demand["Fulfilled"] += online_demand["Shared_Stock_To_Online"]
+        online_demand["Unfulfilled"] -= online_demand["Shared_Stock_To_Online"]
+
+        # Update shared stock usage
+        usage_summary = online_demand.groupby("Product")["Shared_Stock_To_Online"].sum().reset_index()
+        stock_data = stock_data.merge(usage_summary, on="Product", how="left", suffixes=("", "_Used"))
+        stock_data["Shared_Stock"] -= stock_data["Shared_Stock_Used"].fillna(0)
+
+        # Fulfill offline demand
+        offline_mask = (daily_demand["Day"] == day) & (daily_demand["Location"] != "Online Platform")
+        offline_demand = daily_demand.loc[offline_mask]
+        stock_data_offline = stock_data[~stock_data["Location"].isin(["Online Platform"])]
+
+        # Merge with offline demand to calculate fulfillment
+        offline_demand = offline_demand.merge(
+            stock_data_offline[["Location", "Product", "Remaining_Stock"]],
+            on=["Location", "Product"],
+            how="left"
+        )
+        offline_demand["Fulfillable"] = offline_demand[["Remaining_Stock", "Unfulfilled"]].min(axis=1)
+        offline_demand["Fulfilled"] += offline_demand["Fulfillable"]
+        offline_demand["Unfulfilled"] -= offline_demand["Fulfillable"]
+
+        # Update stock with offline fulfillment
+        stock_data_offline = stock_data_offline.merge(
+            offline_demand.groupby(["Location", "Product"])["Fulfillable"].sum().reset_index(),
+            on=["Location", "Product"],
+            how="left"
+        )
+        stock_data_offline["Remaining_Stock"] -= stock_data_offline["Fulfillable"]
+
+        # Combine back updated stocks
+        stock_data = pd.concat([stock_data_offline, stock_data[stock_data["Location"] == "Online Platform"]])
+
+        # Update daily demand
+        daily_demand.update(online_demand)
+        daily_demand.update(offline_demand)
+
+    return daily_demand
+
 
 def calculate_fulfillment_rates(demand_data):
     """
