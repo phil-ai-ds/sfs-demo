@@ -4,7 +4,7 @@ import numpy as np
 import plotly.express as px
 
 # Load data from CSV files
-@st.cache_data  # Use st.cache_data for loading data
+# @st.cache_data  # Use st.cache_data for loading data
 def load_data():
     initial_stock = pd.read_csv("initial_stock.csv")
     daily_demand = pd.read_csv("daily_demand.csv")
